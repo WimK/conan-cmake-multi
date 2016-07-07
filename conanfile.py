@@ -10,20 +10,12 @@ class CMakeMultiDep(object):
                                              for p in deps_cpp_info.include_paths)
         self.lib_paths = "\n\t\t\t".join('"%s"' % p.replace("\\", "/")
                                          for p in deps_cpp_info.lib_paths)
-        full_path_libs = []
-        for lib_path in deps_cpp_info.lib_paths:
-            lib_path = lib_path.replace("\\", "/")
-            files = os.listdir(lib_path)
 
-            for lib in deps_cpp_info.libs:
-                for f in files:
-                    if lib in f:  # account for 
-                        full_path_libs.append("%s/%s" % (lib_path, f))
-                        break
-                else:
-                    raise Exception("Cannot locate lib %s in %s" % (lib, files))
-
-        self.libs = " ".join(full_path_libs)
+        if deps_cpp_info.lib_paths:
+            lib_path = deps_cpp_info.lib_paths[0].replace("\\", "/")
+            self.libs = " ".join(["%s/%s.lib" % (lib_path, lib) for lib in deps_cpp_info.libs])
+        else:
+            self.libs = ""
         self.defines = "\n\t\t\t".join("-D%s" % d for d in deps_cpp_info.defines)
         self.cppflags = " ".join(deps_cpp_info.cppflags)
         self.cflags = " ".join(deps_cpp_info.cflags)
@@ -104,10 +96,10 @@ class cmakemulti(Generator):
     @property
     def content_multi(self):
         return """
-if(EXISTS conanbuildinfo_release.cmake)
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/conanbuildinfo_release.cmake")
     include(${CMAKE_CURRENT_LIST_DIR}/conanbuildinfo_release.cmake)
 endif()
-if(EXISTS conanbuildinfo_debug.cmake)
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/conanbuildinfo_debug.cmake")
     include(${CMAKE_CURRENT_LIST_DIR}/conanbuildinfo_debug.cmake)
 endif()
 
@@ -307,6 +299,57 @@ function(conan_check_compiler)
     endif()
     check_compiler_version()
 endfunction()
+
+macro(conan_determine_library_build_type basename)   
+    if(NOT CONAN_${basename}_ROOT)
+        message(FATAL_ERROR "Unable to determine library (${basename}) build type. Make sure you are not running a multi-configuration.")
+    else()
+        if(NOT ${basename}_BUILD_TYPE)
+            file(READ ${CONAN_${basename}_ROOT}/conaninfo.txt CONANINFO_FILE) 
+        
+            set(${basename}_BUILD_TYPE "Release")
+            if(CONANINFO_FILE MATCHES "build_type=Debug")
+                set(${basename}_BUILD_TYPE "Debug")
+            endif()
+        endif()
+    endif()
+endmacro()
+
+macro(conan_select_include_configurations basename)
+    set(${basename}_INCLUDE_DIRS_RELEASE "")
+    set(${basename}_INCLUDE_DIRS_DEBUG "")
+    if(CONAN_INCLUDE_DIRS_${basename}_RELEASE AND CONAN_INCLUDE_DIRS_${basename}_DEBUG) #multi-configuration
+        set(${basename}_INCLUDE_DIRS_RELEASE ${CONAN_INCLUDE_DIRS_${basename}_RELEASE})
+        set(${basename}_INCLUDE_DIRS_DEBUG ${CONAN_INCLUDE_DIRS_${basename}_DEBUG})
+        set(${basename}_REQUIRED_VARS
+            ${basename}_INCLUDE_DIRS_RELEASE
+            ${basename}_INCLUDE_DIRS_DEBUG
+            ${${basename}_REQUIRED_VARS})        
+    elseif(CONAN_INCLUDE_DIRS_${basename}_RELEASE)
+        set(${basename}_INCLUDE_DIRS ${CONAN_INCLUDE_DIRS_${basename}_RELEASE})
+        set(${basename}_INCLUDE_DIRS_RELEASE ${CONAN_INCLUDE_DIRS_${basename}_RELEASE})
+        set(${basename}_REQUIRED_VARS
+            ${basename}_INCLUDE_DIRS
+            ${${basename}_REQUIRED_VARS})
+    elseif(CONAN_INCLUDE_DIRS_${basename}_DEBUG) 
+        set(${basename}_INCLUDE_DIRS ${CONAN_INCLUDE_DIRS_${basename}_DEBUG})
+        set(${basename}_INCLUDE_DIRS_DEBUG ${CONAN_INCLUDE_DIRS_${basename}_DEBUG})
+        set(${basename}_REQUIRED_VARS
+            ${basename}_INCLUDE_DIRS
+            ${${basename}_REQUIRED_VARS})           
+    elseif(CONAN_INCLUDE_DIRS_${basename})    
+        set(${basename}_INCLUDE_DIRS ${CONAN_INCLUDE_DIRS_${basename}})
+        conan_determine_library_build_type("${basename}")
+        if(${basename}_BUILD_TYPE STREQUAL "Debug")        
+            set(${basename}_INCLUDE_DIRS_DEBUG ${CONAN_INCLUDE_DIRS_${basename}})
+        else()
+            set(${basename}_INCLUDE_DIRS_RELEASE ${CONAN_INCLUDE_DIRS_${basename}})
+        endif()
+        set(${basename}_REQUIRED_VARS
+            ${basename}_INCLUDE_DIRS
+            ${${basename}_REQUIRED_VARS})
+    endif()
+endmacro()
 """
 
 
@@ -314,7 +357,7 @@ class CMakeMultiGenConan(ConanFile):
     name = "CMakeMultiGen"
     version = "0.1"
     license = "MIT"
-    url = "https://github.com/memsharded/conan-cmake-multi"
+    url = "https://github.com/WimK/conan-cmake-multi"
 
     def build(self):
       pass
